@@ -44,6 +44,14 @@ The pipeline orchestrator (`job/pipeline.py`) drives the workflow sequentially t
 ### Makefile Commands
 The project is bundled with a `Makefile` to simplify local execution.
 
+**0. Initialize Repository**
+initialize the repo so `uv` could recognize that:
+
+```bash
+cd [repository name] &&
+make init
+```
+
 **1. Install Dependencies**
 Install PySpark, PyYAML, and py4j dependencies cleanly using `uv`:
 ```bash
