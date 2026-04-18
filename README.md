@@ -33,7 +33,7 @@ The pipeline orchestrator (`job/pipeline.py`) drives the workflow sequentially t
 
 ## Incremental Processing & Late Data Strategy
 * **Idempotency:** The pipeline uses Spark's dynamic partition overwrite mode (`spark.sql.sources.partitionOverwriteMode = "dynamic"`). 
-* **Late Data Handling:** Because the pipeline partitions outputs by `event_date`, late-arriving events are automatically grouped into their correct historical partition. If the pipeline is re-run for a specific day, it safely overwrites only that day's partition without duplicating records or corrupting adjacent days.
+* **Late Data Handling:** Because the pipeline partitions outputs by `event_date`, late-arriving events are automatically grouped into their correct historical partition. If the pipeline is re-run for a specific day, it safely overwrites only that day's partition without duplicating records or corrupting adjacent day Because we are dealing with immutable, time-series event data partitioned by event_date, we do not need row-level updates. Overwriting the daily partition is significantly faster and less computationally expensive than performing row-by-row merges. It allows us to use standard, lightweight Parquet files without requiring the overhead of a Delta Lake
 
 ## Setup & Usage
 

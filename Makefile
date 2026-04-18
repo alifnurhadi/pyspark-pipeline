@@ -14,10 +14,16 @@ endif
 
 help:
 	@echo "Available commands:"
+	@echo "  make init     - to initialize the repository in local"
 	@echo "  make install  - Install dependencies using uv"
 	@echo "  make run      - Run the PySpark data pipeline"
 	@echo "  make clean    - Clean up PySpark metadata, logs, and output directories"
 	@echo "  make format   - Format code using standard python tools"
+
+init:
+	uv venv &&
+	uv sync
+
 
 install:
 	@echo "Installing dependencies via uv..."

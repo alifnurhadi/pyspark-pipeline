@@ -1,0 +1,5 @@
+paths:
+  raw_events: data/raw/events
+  users: data/reference/users.csv
+  output: output
+  quarantine: data/quarentine
