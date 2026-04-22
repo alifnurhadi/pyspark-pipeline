@@ -1,6 +1,6 @@
 
 
-# Data Engineer Batch Pipeline (PySpark)
+# Batch Pipeline using PySpark
 
 ## Overview
 This repository contains a PySpark batch data pipeline implementing a Medallion Architecture (Bronze, Silver, Gold). It is designed to ingest raw, messy event data, clean and validate it, enrich it with user reference data, and produce analytics-ready aggregate tables.
