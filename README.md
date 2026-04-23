@@ -51,6 +51,16 @@ initialize the repo so `uv` could recognize that:
 cd [repository name] &&
 make init
 ```
+### on mac :
+```bash
+source .venv/bin/activate
+```
+### on windows :
+```bash
+.venv\Scripts\activate.bat
+```
+
+
 
 **1. Install Dependencies**
 Install PySpark, PyYAML, and py4j dependencies cleanly using `uv`:
