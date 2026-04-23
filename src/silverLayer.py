@@ -7,6 +7,7 @@ from pyspark.sql.functions import (
     col,
     datediff,
     lit,
+    row_number,
     try_to_date,
     when,
 )
@@ -14,6 +15,7 @@ from pyspark.sql.session import SparkSession
 from pyspark.sql.types import StringType, StructField, StructType
 
 from .bronzeLayer import BaseLayer
+from .schema import AntiDuplicate
 
 
 class SilverLayer(
@@ -101,21 +103,67 @@ class SilverLayer(
 
     def write_data(self, output_path: str):
 
-        self.logger.info(f"Writing Silver layer data to {output_path}")
+        self.logger.info(f"Writing bronze layer data to {output_path}")
         try:
             if self.df.isEmpty():
-                self.logger.warning("Silver DataFrame is empty. Bypassing write.")
+                self.logger.warning("bronze DataFrame is empty. Bypassing write.")
                 return self
 
             os.makedirs(output_path, exist_ok=True)
+
+            Exists = os.path.exists(output_path)
+            PartionData = any(
+                file.endswith(".parquet") or file.startswith("event_date=")
+                for file in os.listdir(output_path)
+            )
+            if Exists and PartionData:
+                getRow = self.df.select("event_date").distinct().collect()
+
+                getLateData = [
+                    item["event_date"]
+                    for item in getRow
+                    if item["event_date"] is not None
+                ]
+                if getLateData:
+                    self.logger.info(
+                        f"Late Data Check: Fetching existing history for partitions: {getLateData}"
+                    )
+                    try:
+                        existing_df = self.session.read.parquet(output_path).filter(
+                            col("event_date").isin(getLateData)
+                        )
+
+                        combined_df = self.df.unionByName(
+                            existing_df, allowMissingColumns=True
+                        )
+
+                        self.df = (
+                            combined_df.withColumn(
+                                "rn",
+                                row_number().over(
+                                    AntiDuplicate("event_id", "event_ts", "value")
+                                ),
+                            )
+                            .filter(col("rn") == 1)
+                            .drop("rn")
+                        )
+
+                        self.logger.info(
+                            "Successfully merged late data with existing historical data."
+                        )
+
+                    except Exception as e:
+                        self.logger.warning(
+                            f"Could not read existing historical data (might be empty/corrupt): {e}"
+                        )
 
             self.df.write.mode("overwrite").partitionBy("event_date").parquet(
                 output_path
             )
 
-            self.logger.info("SUCCESS: Silver layer data written idempotently.")
+            self.logger.info("SUCCESS: bronze layer data written idempotently.")
 
         except Exception as e:
-            self.logger.error(f"Failed to write Silver data: {e}")
+            self.logger.error(f"Failed to write silver data: {e}")
 
         return self

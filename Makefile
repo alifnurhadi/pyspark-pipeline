@@ -5,11 +5,13 @@ ifeq ($(OS), Windows_NT)
     RM_RF       := rmdir /s /q
     FIND_CACHE  := for /d /r . %%d in (__pycache__) do @if exist "%%d" rd /s /q "%%d"
     SET_PATH    := set PYTHONPATH=. &&
+
 else
     PYTHON      := python3
     RM_RF       := rm -rf
     FIND_CACHE  := find . -type d -name "__pycache__" -exec rm -rf {} +
     SET_PATH    := PYTHONPATH=.
+
 endif
 
 help:
@@ -21,9 +23,8 @@ help:
 	@echo "  make format   - Format code using standard python tools"
 
 init:
-	uv venv &&
-	uv sync
-
+	uv venv && \
+	uv sync \
 
 install:
 	@echo "Installing dependencies via uv..."

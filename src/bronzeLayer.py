@@ -1,11 +1,13 @@
 import logging
 import os
+from posix import listdir
 
 from pyspark.errors.exceptions.base import AnalysisException
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, row_number, try_to_date, upper
 from pyspark.sql.types import StructType
-from pyspark.sql.window import Window
+
+from .schema import AntiDuplicate
 
 
 class BaseLayer:
@@ -112,13 +114,11 @@ class BronzeLayer(BaseLayer):
                 QuarentinePath
             )
 
-        window_spec = Window.partitionBy("event_id").orderBy(
-            col("event_ts").desc(), col("value").desc()
-        )
-
         self.df = (
             (self.df.filter(col("_corrupt_record").isNull()).drop("_corrupt_record"))
-            .withColumn("rn", row_number().over(window_spec))
+            .withColumn(
+                "rn", row_number().over(AntiDuplicate("event_id", "event_ts", "value"))
+            )
             .filter(col("rn") == 1)
             .drop("rn")
             .withColumn("event_type", upper(col("event_type")))
@@ -141,6 +141,52 @@ class BronzeLayer(BaseLayer):
 
             os.makedirs(output_path, exist_ok=True)
 
+            Exists = os.path.exists(output_path)
+            PartionData = any(
+                file.endswith(".parquet") or file.startswith("event_date=")
+                for file in os.listdir(output_path)
+            )
+            if Exists and PartionData:
+                getRow = self.df.select("event_date").distinct().collect()
+
+                getLateData = [
+                    item["event_date"]
+                    for item in getRow
+                    if item["event_date"] is not None
+                ]
+                if getLateData:
+                    self.logger.info(
+                        f"Late Data Check: Fetching existing history for partitions: {getLateData}"
+                    )
+                    try:
+                        existing_df = self.session.read.parquet(output_path).filter(
+                            col("event_date").isin(getLateData)
+                        )
+
+                        combined_df = self.df.unionByName(
+                            existing_df, allowMissingColumns=True
+                        )
+
+                        self.df = (
+                            combined_df.withColumn(
+                                "rn",
+                                row_number().over(
+                                    AntiDuplicate("event_id", "event_ts", "value")
+                                ),
+                            )
+                            .filter(col("rn") == 1)
+                            .drop("rn")
+                        )
+
+                        self.logger.info(
+                            "Successfully merged late data with existing historical data."
+                        )
+
+                    except Exception as e:
+                        self.logger.warning(
+                            f"Could not read existing historical data (might be empty/corrupt): {e}"
+                        )
+
             self.df.write.mode("overwrite").partitionBy("event_date").parquet(
                 output_path
             )
@@ -148,6 +194,6 @@ class BronzeLayer(BaseLayer):
             self.logger.info("SUCCESS: bronze layer data written idempotently.")
 
         except Exception as e:
-            self.logger.error(f"Failed to write Silver data: {e}")
+            self.logger.error(f"Failed to write bronze data: {e}")
 
         return self
