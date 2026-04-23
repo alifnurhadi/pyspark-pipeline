@@ -1,6 +1,6 @@
 
 
-# Data Engineer Batch Pipeline (PySpark)
+# Batch Pipeline using PySpark
 
 ## Overview
 This repository contains a PySpark batch data pipeline implementing a Medallion Architecture (Bronze, Silver, Gold). It is designed to ingest raw, messy event data, clean and validate it, enrich it with user reference data, and produce analytics-ready aggregate tables.
@@ -33,7 +33,7 @@ The pipeline orchestrator (`job/pipeline.py`) drives the workflow sequentially t
 
 ## Incremental Processing & Late Data Strategy
 * **Idempotency:** The pipeline uses Spark's dynamic partition overwrite mode (`spark.sql.sources.partitionOverwriteMode = "dynamic"`). 
-* **Late Data Handling:** Because the pipeline partitions outputs by `event_date`, late-arriving events are automatically grouped into their correct historical partition. If the pipeline is re-run for a specific day, it safely overwrites only that day's partition without duplicating records or corrupting adjacent day Because we are dealing with immutable, time-series event data partitioned by event_date, we do not need row-level updates. Overwriting the daily partition is significantly faster and less computationally expensive than performing row-by-row merges. It allows us to use standard, lightweight Parquet files without requiring the overhead of a Delta Lake
+* **Late Data Handling:** Because the pipeline partitions outputs by `event_date`, late-arriving events are automatically grouped into their correct historical partition. If the pipeline is re-run for a specific day, it safely overwrites only that day's partition without duplicating records or corrupting adjacent day Because we are dealing with immutable, time-series event data partitioned by event_date, we do not need row-level updates. Overwriting the daily partition is significantly faster and less computationally expensive than performing row-by-row merges. It allows us to use standard, lightweight Parquet files without requiring the overhead of a Delta Lake. While a Merge (Upsert) is great for keeping user profile tables up-to-date, it is an anti-pattern for high-volume event logs. Merging requires matching keys across datasets, which forces expensive shuffle operations across the cluster. Since our events (like clicks or purchases) are historical facts that don't change once they occur, treating the partitions as immutable and overwriting them in bulk is the most efficient path.
 
 ## Setup & Usage
 
@@ -43,6 +43,14 @@ The pipeline orchestrator (`job/pipeline.py`) drives the workflow sequentially t
 
 ### Makefile Commands
 The project is bundled with a `Makefile` to simplify local execution.
+
+**0. Initialize Repository**
+initialize the repo so `uv` could recognize that:
+
+```bash
+cd [repository name] &&
+make init
+```
 
 **1. Install Dependencies**
 Install PySpark, PyYAML, and py4j dependencies cleanly using `uv`:
