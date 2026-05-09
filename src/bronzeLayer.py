@@ -88,6 +88,7 @@ class BronzeLayer(BaseLayer):
             return self
 
         self.df = self.df.withColumn("event_date", try_to_date("event_ts"))
+        self.df = self.df.withColumn("event_type", upper("event_type"))
         self.df.cache()
 
         quarentine = self.df.filter(col("_corrupt_record").isNotNull())
