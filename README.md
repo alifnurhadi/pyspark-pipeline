@@ -1,77 +1,469 @@
-
-
 # Batch Pipeline using PySpark
 
-## Overview
-This repository contains a PySpark batch data pipeline implementing a Medallion Architecture (Bronze, Silver, Gold). It is designed to ingest raw, messy event data, clean and validate it, enrich it with user reference data, and produce analytics-ready aggregate tables.
+A production-style PySpark batch pipeline implementing the **Medallion Architecture** (**Bronze → Silver → Gold**) for scalable, analytics-ready event processing.
 
-## Pipeline Design
-The pipeline orchestrator (`job/pipeline.py`) drives the workflow sequentially through three layers:
+The project demonstrates how to design a robust data engineering workflow that handles:
 
-1. **Bronze Layer (Raw to Cleaned):** * Ingests raw JSONL events using an explicitly defined schema (`src/schema.py`).
-   * Schema mismatches and invalid records are caught via a `_corrupt_record` column and quarantined into a separate directory for later inspection.
-   * Deduplicates records based on `event_id`, keeping the latest event by `event_ts` and `value`.
-   * Normalizes fields (e.g., uppercasing `event_type` and filling null `value` fields with `0`).
-   * Writes the cleaned output to Parquet format, partitioned by `event_date`.
+* Raw event ingestion
+* Schema enforcement
+* Data quality validation
+* Quarantine handling
+* Incremental processing
+* Dimension enrichment
+* Analytical aggregations
+* Partition-aware batch optimization
 
-2. **Silver Layer (Enrichment):**
-   * Joins the cleaned Bronze events with user reference data (`data/reference/users.csv`).
-   * Handles missing dimensions gracefully by defaulting missing countries to `"UNKNOWN"`.
-   * Derives business logic columns: `is_purchase` (boolean) and `days_since_signup` (integer).
-   * Filters out any records with a null `event_date` to ensure partition integrity before writing out to Parquet.
+Built with simplicity and operational clarity in mind, this repository focuses on practical engineering patterns commonly used in modern data platforms.
 
-3. **Gold Layer (Aggregations):**
-   * Generates two primary analytics tables:
-     * **Country DAU:** Aggregates daily metrics per country, including `total_events`, `total_value`, `total_purchases`, and `unique_users`.
-     * **Days Before Purchase:** Calculates the average days between a user signing up and making a purchase, aggregated by country (`avg_days_to_purchase`).
-   * Writes final outputs partitioned by `event_date`.
+---
 
-## Data Quality Rules
-* **Explicit Schema Enforcement:** Reading data strictly uses Spark's `PERMISSIVE` mode paired with a defined schema. Corrupted data is intercepted immediately.
-* **Defensive Cleansing:** Missing `value` amounts are filled with zero, missing countries are labeled, and non-existent `signup_date` strings are safely parsed using `try_to_date`.
-* **Quarantine:** Rather than failing the job or quietly dropping data, unparseable lines are segregated into `data/quarentine` for auditing.
+# Architecture Overview
 
-## Incremental Processing & Late Data Strategy
-* **Idempotency:** The pipeline uses Spark's dynamic partition overwrite mode (`spark.sql.sources.partitionOverwriteMode = "dynamic"`). 
-* **Late Data Handling:** Because the pipeline partitions outputs by `event_date`, late-arriving events are automatically grouped into their correct historical partition. If the pipeline is re-run for a specific day, it safely overwrites only that day's partition without duplicating records or corrupting adjacent day Because we are dealing with immutable, time-series event data partitioned by event_date, we do not need row-level updates. Overwriting the daily partition is significantly faster and less computationally expensive than performing row-by-row merges. It allows us to use standard, lightweight Parquet files without requiring the overhead of a Delta Lake. While a Merge (Upsert) is great for keeping user profile tables up-to-date, it is an anti-pattern for high-volume event logs. Merging requires matching keys across datasets, which forces expensive shuffle operations across the cluster. Since our events (like clicks or purchases) are historical facts that don't change once they occur, treating the partitions as immutable and overwriting them in bulk is the most efficient path.
+```text
+                Raw JSONL Events
+                        │
+                        ▼
+              ┌─────────────────┐
+              │ Bronze Layer    │
+              │ Cleaning & DQ   │
+              └─────────────────┘
+                        │
+                        ▼
+              ┌─────────────────┐
+              │ Silver Layer    │
+              │ Enrichment      │
+              └─────────────────┘
+                        │
+                        ▼
+              ┌─────────────────┐
+              │ Gold Layer      │
+              │ Aggregations    │
+              └─────────────────┘
+```
 
-## Setup & Usage
+---
 
-### Prerequisites
-* Python 3.13 or higher
-* [uv](https://github.com/astral-sh/uv) installed for fast dependency management.
+# Project Structure
 
-### Makefile Commands
-The project is bundled with a `Makefile` to simplify local execution.
+```text
+.
+├── config/
+│   └── pipeline.yaml
+│
+├── data/
+│   ├── raw/
+│   ├── bronze/
+│   ├── silver/
+│   ├── gold/
+│   ├── quarantine/
+│   └── reference/
+│       └── users.csv
+│
+├── job/
+│   └── pipeline.py
+│
+├── src/
+│   ├── bronze.py
+│   ├── silver.py
+│   ├── gold.py
+│   ├── schema.py
+│   └── utils.py
+│
+├── Makefile
+├── pyproject.toml
+└── README.md
+```
 
-**0. Initialize Repository**
-initialize the repo so `uv` could recognize that:
+---
+
+# Core Features
+
+## Bronze Layer — Raw Ingestion & Cleansing
+
+The Bronze layer is responsible for transforming raw JSONL event logs into clean, structured datasets.
+
+### Capabilities
+
+* Explicit Spark schema enforcement
+* Corrupt record detection using `_corrupt_record`
+* Invalid row quarantine
+* Deduplication using business keys
+* Field normalization
+* Partitioned Parquet outputs
+
+### Data Quality Logic
+
+#### Schema Enforcement
+
+Raw events are read using a predefined schema from `src/schema.py`.
+
+This prevents:
+
+* Silent schema drift
+* Implicit type coercion
+* Corrupted downstream datasets
+
+#### Corrupt Record Handling
+
+Spark operates in `PERMISSIVE` mode:
+
+* Malformed rows are captured
+* Invalid records are redirected to:
+
+```text
+data/quarantine/
+```
+
+instead of silently failing or being discarded.
+
+#### Deduplication Strategy
+
+Duplicate events are resolved using:
+
+* `event_id`
+* latest `event_ts`
+* highest `value`
+
+This guarantees deterministic outputs during reruns.
+
+#### Standardization
+
+The pipeline normalizes incoming data:
+
+| Field        | Transformation          |
+| ------------ | ----------------------- |
+| `event_type` | Uppercased              |
+| `value`      | Nulls replaced with `0` |
+
+---
+
+## Silver Layer — Business Enrichment
+
+The Silver layer enriches clean event data with dimensional reference data and business logic.
+
+### Capabilities
+
+* User dimension joins
+* Derived business metrics
+* Safe date parsing
+* Null-safe enrichment
+* Partition integrity enforcement
+
+### Enrichment Logic
+
+#### User Reference Join
+
+Bronze events are joined with:
+
+```text
+data/reference/users.csv
+```
+
+#### Derived Columns
+
+| Column              | Description                               |
+| ------------------- | ----------------------------------------- |
+| `is_purchase`       | Boolean purchase indicator                |
+| `days_since_signup` | Difference between signup and event dates |
+
+#### Defensive Defaults
+
+Missing dimensions are safely handled:
+
+| Scenario            | Default                           |
+| ------------------- | --------------------------------- |
+| Missing country     | `"UNKNOWN"`                       |
+| Invalid signup date | Safely parsed using `try_to_date` |
+
+#### Partition Safety
+
+Records with null `event_date` are filtered before write operations to avoid invalid partition structures.
+
+---
+
+## Gold Layer — Analytics Tables
+
+The Gold layer generates analytics-ready datasets optimized for BI and reporting workloads.
+
+---
+
+## 1. Country Daily Active Metrics
+
+Daily country-level aggregates including:
+
+| Metric            | Description           |
+| ----------------- | --------------------- |
+| `total_events`    | Total event count     |
+| `total_value`     | Sum of event values   |
+| `total_purchases` | Purchase count        |
+| `unique_users`    | Distinct active users |
+
+Partitioned by:
+
+```text
+event_date
+```
+
+---
+
+## 2. Average Days Before Purchase
+
+Calculates:
+
+```text
+avg_days_to_purchase
+```
+
+Grouped by:
+
+* `country`
+* `event_date`
+
+Used for:
+
+* conversion analysis
+* onboarding effectiveness
+* purchase latency tracking
+
+---
+
+# Incremental Processing Strategy
+
+The pipeline is designed for safe reruns and late-arriving event handling.
+
+---
+
+## Dynamic Partition Overwrite
+
+Spark configuration:
+
+```python
+spark.sql.sources.partitionOverwriteMode = "dynamic"
+```
+
+Benefits:
+
+* Overwrites only affected partitions
+* Prevents full-table rewrites
+* Enables efficient backfills
+
+---
+
+## Late Data Handling
+
+Since datasets are partitioned by `event_date`:
+
+* Late-arriving records automatically land in the correct historical partition
+* Reprocessing a specific day safely rewrites only that partition
+
+This avoids:
+
+* duplicate events
+* cross-partition corruption
+* unnecessary recomputation
+
+---
+
+# Why No Delta Lake or MERGE?
+
+This pipeline intentionally avoids row-level merge operations.
+
+## Reasoning
+
+Event logs are:
+
+* immutable
+* append-oriented
+* time-series based
+
+Using `MERGE INTO` for high-volume event data introduces:
+
+* expensive shuffles
+* heavy key matching
+* unnecessary compute overhead
+
+Instead, bulk partition overwrites provide:
+
+* simpler architecture
+* faster execution
+* lower infrastructure cost
+* lightweight Parquet-based storage
+
+This pattern is commonly preferred for scalable event-processing systems.
+
+---
+
+# Data Quality Principles
+
+| Principle              | Implementation                 |
+| ---------------------- | ------------------------------ |
+| Explicit schema        | `src/schema.py`                |
+| Corrupt record capture | `_corrupt_record`              |
+| Quarantine strategy    | `data/quarantine/`             |
+| Null-safe defaults     | `fillna()` + defensive parsing |
+| Idempotent reruns      | Dynamic partition overwrite    |
+| Partition integrity    | Null `event_date` filtering    |
+
+---
+
+# Technology Stack
+
+| Component | Purpose                       |
+| --------- | ----------------------------- |
+| PySpark   | Distributed data processing   |
+| Parquet   | Columnar storage format       |
+| uv        | Dependency management         |
+| Makefile  | Developer workflow automation |
+| PyYAML    | Configuration management      |
+
+---
+
+# Setup
+
+## Prerequisites
+
+* Python `3.13+`
+* Java installed
+* Spark-compatible environment
+* [uv package manager](https://github.com/astral-sh/uv?utm_source=chatgpt.com)
+
+---
+
+# Installation
+
+## 1. Initialize Repository
 
 ```bash
-cd [repository name] &&
+cd [repository-name]
 make init
 ```
 
-**1. Install Dependencies**
-Install PySpark, PyYAML, and py4j dependencies cleanly using `uv`:
+---
+
+## 2. Install Dependencies
+
 ```bash
 make install
 ```
 
-**2. Run the Pipeline**
-Execute the full data pipeline (Bronze -> Silver -> Gold). This command automatically injects the `PYTHONPATH` and points the orchestrator to `config/pipeline.yaml`:
+This installs:
+
+* PySpark
+* PyYAML
+* py4j
+* formatting tools
+
+---
+
+# Running the Pipeline
+
+Execute the complete workflow:
+
 ```bash
 make run
 ```
 
-**3. Format Code**
-Ensure code is PEP-8 compliant. This will run `ruff` (or fallback to `black`) to format the codebase:
+This automatically:
+
+* sets `PYTHONPATH`
+* loads `config/pipeline.yaml`
+* executes:
+
+```text
+Bronze → Silver → Gold
+```
+
+---
+
+# Development Commands
+
+## Format Code
+
 ```bash
 make format
 ```
 
-**4. Clean Up**
-Wipe out the generated metadata, quarantine data, output folders, and any `__pycache__` artifacts to reset the environment:
+Runs:
+
+* `ruff`
+* fallback `black`
+
+---
+
+## Clean Environment
+
 ```bash
 make clean
 ```
+
+Removes:
+
+* generated outputs
+* quarantine files
+* Spark metadata
+* `__pycache__`
+
+---
+
+# Example Workflow
+
+```text
+Raw JSONL
+   │
+   ▼
+Bronze Cleansing
+   │
+   ├── Valid Records  ──► Bronze Parquet
+   └── Invalid Rows   ──► Quarantine
+                               │
+                               ▼
+                        Manual Inspection
+
+Bronze Parquet
+   │
+   ▼
+Silver Enrichment
+   │
+   ▼
+Gold Aggregates
+   │
+   ▼
+BI / Analytics / Reporting
+```
+
+---
+
+# Engineering Design Goals
+
+This project prioritizes:
+
+* readability
+* operational simplicity
+* deterministic reruns
+* scalable partition management
+* defensive data quality practices
+* production-oriented ETL patterns
+
+It is intentionally designed as a lightweight batch pipeline that demonstrates strong data engineering fundamentals without introducing unnecessary platform complexity.
+
+---
+
+# Future Improvements
+
+Potential next steps include:
+
+* Airflow orchestration
+* Delta Lake support
+* Data quality observability
+* Great Expectations integration
+* Unit and integration testing
+* Dockerized local environment
+* CI/CD automation
+* Incremental watermarking
+* Cloud object storage support (S3/GCS/ADLS)
+
+---
+
+# License
+
+MIT License.
